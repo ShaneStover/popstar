@@ -18,16 +18,63 @@ jobs:
       run: |
         Expand-Archive -Path "./Popstar-External-main.zip" -DestinationPath "./src" -Force
 
-    - name: Build with MSBuild
+    - name: Find Visual Studio installation & MSBuild
+      shell: pwsh
+      id: findvs
+      run: |
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        if (-not (Test-Path $vswhere)) {
+          Write-Error "vswhere.exe not found at $vswhere"
+          exit 1
+        }
+        # get installation path that has VC tools
+        $inst = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if (-not $inst) {
+          Write-Error "No Visual Studio installation with VC tools found."
+          exit 1
+        }
+        Write-Host "Found VS at: $inst"
+        $msbuild = Join-Path $inst "MSBuild\Current\Bin\MSBuild.exe"
+        if (-not (Test-Path $msbuild)) {
+          $msbuild = Join-Path $inst "MSBuild\Current\Bin\amd64\MSBuild.exe"
+        }
+        if (-not (Test-Path $msbuild)) {
+          Write-Error "MSBuild.exe not found under installation path: $inst"
+          exit 1
+        }
+        Write-Host "MSBuild.exe: $msbuild"
+        echo "::set-output name=msbuild::$msbuild"
+        echo "::set-output name=instpath::$inst"
+
+    - name: Setup VC environment and build with MSBuild
       shell: pwsh
       run: |
-        $msbuild = "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
-        & $msbuild "./src/popstar-external.sln" /p:Configuration=Release /p:Platform=x64
+        $msbuild = "${{ steps.findvs.outputs.msbuild }}"
+        $inst = "${{ steps.findvs.outputs.instpath }}"
+        Write-Host "Using MSBuild: $msbuild"
+        $vcvars = Join-Path $inst "VC\Auxiliary\Build\vcvarsall.bat"
+        if (-not (Test-Path $vcvars)) {
+          Write-Error "vcvarsall.bat not found at $vcvars"
+          exit 1
+        }
+        # call vcvarsall and then msbuild in the same cmd session
+        $sln = "src\popstar-external.sln"
+        $msbuildArgs = "/p:Configuration=Release /p:Platform=x64"
+        Write-Host "Running: `"$vcvars`" x64 && `"$msbuild`" `"$sln`" $msbuildArgs"
+        # Use cmd /c so vcvarsall sets environment for the msbuild invocation
+        $cmd = "cmd /c `"$vcvars`" x64 && `"$msbuild`" `"$sln`" $msbuildArgs"
+        Write-Host "Executing: $cmd"
+        iex $cmd
 
     - name: Package build output
       shell: pwsh
       run: |
-        # Compress the entire src folder (you can narrow this if you know the exact folder)
+        # Adjust these globs if your project's output is in a different folder
+        $exeFiles = Get-ChildItem -Path "./src" -Recurse -Include *.exe -ErrorAction SilentlyContinue
+        if ($exeFiles.Count -eq 0) {
+          Write-Warning "No .exe files found under ./src after build. Listing src tree for debugging:"
+          Get-ChildItem -Path ./src -Recurse | Select-Object FullName,Length | Format-Table -AutoSize
+        }
         if (Test-Path -Path "./artifact.zip") { Remove-Item -Path "./artifact.zip" -Force }
         Compress-Archive -Path "./src/*" -DestinationPath "./artifact.zip" -Force
 
