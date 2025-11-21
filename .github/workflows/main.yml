@@ -11,7 +11,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Extract ZIP
       shell: pwsh
@@ -24,9 +24,15 @@ jobs:
         $msbuild = "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
         & $msbuild "./src/popstar-external.sln" /p:Configuration=Release /p:Platform=x64
 
-    - name: Upload EXE Artifact
-      uses: actions/upload-artifact@v3
+    - name: Package build output
+      shell: pwsh
+      run: |
+        # Compress the entire src folder (you can narrow this if you know the exact folder)
+        if (Test-Path -Path "./artifact.zip") { Remove-Item -Path "./artifact.zip" -Force }
+        Compress-Archive -Path "./src/*" -DestinationPath "./artifact.zip" -Force
+
+    - name: Upload ZIP artifact (v4)
+      uses: actions/upload-artifact@v4
       with:
         name: Popstar-Build
-        path: |
-          **/bin/Release/**/*.exe
+        path: artifact.zip
