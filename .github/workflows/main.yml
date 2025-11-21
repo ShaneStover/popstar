@@ -1,31 +1,70 @@
+name: Build Popstar External
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Extract ZIP
+      shell: pwsh
+      run: |
+        Expand-Archive -Path "./Popstar-External-main.zip" -DestinationPath "./src" -Force
+
+    - name: Find Visual Studio installation & MSBuild
+      shell: pwsh
+      id: findvs
+      run: |
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        if (-not (Test-Path $vswhere)) { Write-Error "vswhere.exe not found"; exit 1 }
+        $inst = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if (-not $inst) { Write-Error "No VS installation with VC tools"; exit 1 }
+        $msbuild = Join-Path $inst "MSBuild\Current\Bin\MSBuild.exe"
+        if (-not (Test-Path $msbuild)) { $msbuild = Join-Path $inst "MSBuild\Current\Bin\amd64\MSBuild.exe" }
+        if (-not (Test-Path $msbuild)) { Write-Error "MSBuild.exe not found"; exit 1 }
+        Write-Host "MSBuild.exe: $msbuild"
+        echo "MSBUILD=$msbuild" >> $GITHUB_ENV
+        echo "VSPATH=$inst" >> $GITHUB_ENV
+
     - name: Setup VC environment and build with MSBuild
       shell: pwsh
       run: |
-        $msbuild = "${{ steps.findvs.outputs.msbuild }}"
-        $inst = "${{ steps.findvs.outputs.instpath }}"
-        Write-Host "Using MSBuild: $msbuild"
+        $msbuild = $env:MSBUILD
+        $inst = $env:VSPATH
         $vcvars = Join-Path $inst "VC\Auxiliary\Build\vcvarsall.bat"
-        if (-not (Test-Path $vcvars)) {
-          Write-Error "vcvarsall.bat not found at $vcvars"
-          exit 1
-        }
-
+        if (-not (Test-Path $vcvars)) { Write-Error "vcvarsall.bat not found"; exit 1 }
         $sln = "src\popstar-external.sln"
         $msbuildArgs = "/p:Configuration=Release /p:Platform=x64"
 
-        # Build a .bat that calls vcvarsall and msbuild in the same cmd session
-        $batContent = @"
-@echo off
-call "$vcvars" x64
-"$msbuild" "$sln" $msbuildArgs
-exit /b %ERRORLEVEL%
-"@
-
+        # Create a batch file to avoid PowerShell quoting issues
+        $batContent = "@echo off`ncall `"$vcvars`" x64`n`"$msbuild`" `"$sln`" $msbuildArgs`nexit /b %ERRORLEVEL%"
         Set-Content -Path build-and-run.bat -Value $batContent -Encoding ASCII
 
-        Write-Host "Contents of build-and-run.bat:"
-        Get-Content build-and-run.bat | ForEach-Object { Write-Host $_ }
-
-        # Execute the batch file and propagate exit code
-        & cmd.exe /c .\build-and-run.bat
+        Write-Host "Executing build-and-run.bat..."
+        & cmd.exe /c build-and-run.bat
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    - name: Package build output
+      shell: pwsh
+      run: |
+        # Compress only the Release EXEs
+        $exeFiles = Get-ChildItem -Path "./src" -Recurse -Include *.exe -ErrorAction SilentlyContinue
+        if ($exeFiles.Count -eq 0) {
+          Write-Warning "No EXEs found. Listing src tree:"
+          Get-ChildItem -Path ./src -Recurse | Select-Object FullName,Length | Format-Table -AutoSize
+        }
+        if (Test-Path "./artifact.zip") { Remove-Item "./artifact.zip" -Force }
+        Compress-Archive -Path "./src/**/bin/Release/*" -DestinationPath "./artifact.zip" -Force
+
+    - name: Upload ZIP artifact (v4)
+      uses: actions/upload-artifact@v4
+      with:
+        name: Popstar-Build
+        path: artifact.zip
