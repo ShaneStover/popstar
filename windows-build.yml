@@ -1,0 +1,32 @@
+name: Build Popstar External
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Extract ZIP
+      shell: pwsh
+      run: |
+        Expand-Archive -Path "./Popstar-External-main.zip" -DestinationPath "./src" -Force
+
+    - name: Build with MSBuild
+      shell: pwsh
+      run: |
+        $msbuild = "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+        & $msbuild "./src/popstar-external.sln" /p:Configuration=Release /p:Platform=x64
+
+    - name: Upload EXE Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: Popstar-Build
+        path: |
+          **/bin/Release/**/*.exe
